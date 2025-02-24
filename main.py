@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import httpx, random
 from typing import Dict, Any
 import websockets
+from datetime import datetime, timedelta
+
 
 app = FastAPI()
 
@@ -16,6 +18,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 存储 prompt_id 和其对应的端口和时间
+PROMPTIDS: Dict[str, Dict[str, Any]] = {}
+
+# 清理过期数据的协程
+async def cleanup_expired_prompt_ids():
+    while True:
+        now = datetime.now()
+        expired_prompt_ids = [
+            prompt_id for prompt_id, details in PROMPTIDS.items()
+            if now - details["timestamp"] > timedelta(minutes=30)
+        ]
+        for prompt_id in expired_prompt_ids:
+            del PROMPTIDS[prompt_id]
+        await asyncio.sleep(600)  # 每10分钟检查一次
 
 # ComfyUI base URL
 COMFYUI_BASE_URL = "http://127.0.0.1"
@@ -30,15 +46,38 @@ async def proxy_prompt(data: Dict[Any, Any]):
     Proxy the prompt request to ComfyUI
     """
     try:
+        port = PORTS
         response = await http_client.post(
-            f"{COMFYUI_BASE_URL}:{PORTS}/prompt",
+            f"{COMFYUI_BASE_URL}:{port}/prompt",
             json=data,
+            timeout=30.0
+        )
+        result = response.json()
+        # 提取 prompt_id 字段
+        prompt_id = result.get("prompt_id")
+        # 保存端口和时间戳
+        PROMPTIDS[prompt_id] = {"port": port, "timestamp": datetime.now()}
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/history/{prompt_id}")
+async def proxy_prompt(prompt_id: str):
+    """
+    Proxy the prompt request to ComfyUI
+    """
+    try:
+        details = PROMPTIDS.get(prompt_id)
+        if not details:
+            raise HTTPException(status_code=404, detail="Prompt ID not found or expired")
+        port = details["port"]
+        response = await http_client.get(
+            f"{COMFYUI_BASE_URL}:{port}/history/{prompt_id}",
             timeout=30.0
         )
         return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/upload/image")
 async def proxy_upload_image(file: UploadFile):
@@ -136,6 +175,12 @@ async def proxy_websocket(websocket: WebSocket):
     await websocket.close(code=1011, reason="All port connection attempts failed")
 
 
+@app.on_event("startup")
+async def startup_event():
+    """
+    启动时启动清理过期数据的协程
+    """
+    asyncio.create_task(cleanup_expired_prompt_ids())
 
 @app.on_event("shutdown")
 async def shutdown_event():
