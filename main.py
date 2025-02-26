@@ -35,7 +35,7 @@ async def cleanup_expired_prompt_ids():
 
 # ComfyUI base URL
 COMFYUI_BASE_URL = "http://127.0.0.1"
-PORTS = random.randint(2000, 2009)
+PORTS = random.randint(2000, 2009) 
 
 # Create an async HTTP client
 http_client = httpx.AsyncClient(verify=False)  # disable SSL verification since it's using self-signed cert
@@ -127,7 +127,7 @@ async def proxy_websocket(websocket: WebSocket):
 
     # 连接到 ComfyUI WebSocket 的端口范围和重试次数
     max_retries = 3  # 每个端口重试次数
-    ports = range(2000, 2010)
+    ports = range(2000, 2010) # 2000 到 2009 端口
 
     # 定义消息转发协程
     async def forward_to_client(comfy_ws):
