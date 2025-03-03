@@ -6,6 +6,8 @@ from typing import Dict, Any
 import websockets
 from datetime import datetime, timedelta
 
+from utils import find_image_value
+
 
 app = FastAPI()
 
@@ -19,23 +21,24 @@ app.add_middleware(
 )
 
 # 存储 prompt_id 和其对应的端口和时间
-PROMPTIDS: Dict[str, Dict[str, Any]] = {}
+CACHES: Dict[str, Dict[str, Any]] = {}
 
 # 清理过期数据的协程
 async def cleanup_expired_prompt_ids():
     while True:
         now = datetime.now()
         expired_prompt_ids = [
-            prompt_id for prompt_id, details in PROMPTIDS.items()
+            prompt_id for prompt_id, details in CACHES.items()
             if now - details["timestamp"] > timedelta(minutes=30)
         ]
         for prompt_id in expired_prompt_ids:
-            del PROMPTIDS[prompt_id]
+            del CACHES[prompt_id]
         await asyncio.sleep(600)  # 每10分钟检查一次
 
 # ComfyUI base URL
-COMFYUI_BASE_URL = "http://127.0.0.1"
+COMFYUI_BASE_URLS = ["http://127.0.0.1"]
 PORTS = random.randint(2000, 2009) 
+COMFYUI_BASE_URL = random.choice(COMFYUI_BASE_URLS) + ":" + str(PORTS)
 
 # Create an async HTTP client
 http_client = httpx.AsyncClient(verify=False)  # disable SSL verification since it's using self-signed cert
@@ -46,17 +49,23 @@ async def proxy_prompt(data: Dict[Any, Any]):
     Proxy the prompt request to ComfyUI
     """
     try:
-        port = PORTS
+        url = COMFYUI_BASE_URL
+        file_name = find_image_value(data)
+        if len(file_name) > 0:
+            link = CACHES.get(file_name)
+            if len(link) > 0:
+                url = link
+
         response = await http_client.post(
-            f"{COMFYUI_BASE_URL}:{port}/prompt",
+            f"{url}/prompt",
             json=data,
             timeout=30.0
         )
         result = response.json()
         # 提取 prompt_id 字段
         prompt_id = result.get("prompt_id")
-        # 保存端口和时间戳
-        PROMPTIDS[prompt_id] = {"port": port, "timestamp": datetime.now()}
+        # 保存连接和时间戳
+        CACHES[prompt_id] = {"link": url, "timestamp": datetime.now()}
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -67,12 +76,12 @@ async def proxy_prompt(prompt_id: str):
     Proxy the prompt request to ComfyUI
     """
     try:
-        details = PROMPTIDS.get(prompt_id)
+        details = CACHES.get(prompt_id)
         if not details:
             raise HTTPException(status_code=404, detail="Prompt ID not found or expired")
-        port = details["port"]
+        url = details["link"]
         response = await http_client.get(
-            f"{COMFYUI_BASE_URL}:{port}/history/{prompt_id}",
+            f"{url}/history/{prompt_id}",
             timeout=30.0
         )
         return response.json()
@@ -86,12 +95,16 @@ async def proxy_upload_image(file: UploadFile):
     """
     try:
         files = {"image": (file.filename, await file.read())}
+        url = COMFYUI_BASE_URL
         response = await http_client.post(
-            f"{COMFYUI_BASE_URL}:{PORTS}/upload/image",
+            f"{url}/upload/image",
             files=files,
             timeout=30.0
         )
-        return response.json()
+        result = response.json()
+        file_name = result.get("name")
+        CACHES[file_name] = {"link": url, "timestamp": datetime.now()}
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -103,12 +116,16 @@ async def proxy_upload_mask(file: UploadFile):
     """
     try:
         files = {"image": (file.filename, await file.read())}
+        url = COMFYUI_BASE_URL
         response = await http_client.post(
-            f"{COMFYUI_BASE_URL}:{PORTS}/upload/mask",
+            f"{url}/upload/mask",
             files=files,
             timeout=30.0
         )
-        return response.json()
+        result = response.json()
+        file_name = result.get("name")
+        CACHES[file_name] = {"link": url, "timestamp": datetime.now()}
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -147,29 +164,30 @@ async def proxy_websocket(websocket: WebSocket):
             pass
 
     # 尝试连接端口并添加重试机制
-    for port in ports:
-        for attempt in range(max_retries):
-            try:
-                async with websockets.connect(
-                    f"ws://127.0.0.1:{port}/ws?clientId={client_id}"
-                ) as comfy_ws:
-                    # 使用 asyncio.gather 进行双向消息转发
-                    forward_tasks = asyncio.gather(
-                        forward_to_client(comfy_ws),
-                        forward_to_comfy(comfy_ws)
-                    )
+    for url in COMFYUI_BASE_URLS:
+        for port in ports:
+            for attempt in range(max_retries):
+                try:
+                    async with websockets.connect(
+                        f"ws://{url}:{port}/ws?clientId={client_id}"
+                    ) as comfy_ws:
+                        # 使用 asyncio.gather 进行双向消息转发
+                        forward_tasks = asyncio.gather(
+                            forward_to_client(comfy_ws),
+                            forward_to_comfy(comfy_ws)
+                        )
 
-                    try:
-                        await forward_tasks
-                    except Exception:
-                        pass
-                    finally:
-                        forward_tasks.cancel()
-                    return  # 成功连接后，结束函数
+                        try:
+                            await forward_tasks
+                        except Exception:
+                            pass
+                        finally:
+                            forward_tasks.cancel()
+                        return  # 成功连接后，结束函数
 
-            except Exception as e:
-                print(f"Connection to port {port} failed on attempt {attempt + 1}/{max_retries}: {e}")
-                await asyncio.sleep(1)  # 在重试之间等待 1 秒
+                except Exception as e:
+                    print(f"Connection to port {port} failed on attempt {attempt + 1}/{max_retries}: {e}")
+                    await asyncio.sleep(1)  # 在重试之间等待 1 秒
 
     # 如果所有端口和重试均失败，则关闭连接
     await websocket.close(code=1011, reason="All port connection attempts failed")
