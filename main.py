@@ -2,8 +2,7 @@ import asyncio, requests
 from fastapi import FastAPI, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from fastapi.responses import RedirectResponse
-import httpx, random, time
+import httpx, random
 from typing import Dict, Any
 from datetime import datetime, timedelta
 from utils import find_value, CACHES
@@ -42,9 +41,6 @@ COMFYUI_BASE_URL = random.choice(COMFYUI_BASE_URLS) + ":" + str(PORTS)
 # Create an async HTTP client
 http_client = httpx.AsyncClient(verify=False)  # disable SSL verification since it's using self-signed cert
 
-@app.get("/ui")
-async def fetch_html(port):
-    return RedirectResponse(url="http://127.0.0.1:"+port)
 
 @app.post("/prompt")
 async def proxy_prompt(data: Dict[Any, Any]):
@@ -84,6 +80,7 @@ async def view(filename: str, type: str):
 
     while retries < max_retries:
         detail = CACHES.get(filename)
+        print("detail == ", detail)
 
         if detail is None:
             await asyncio.sleep(retry_interval)  # 异步等待
@@ -95,10 +92,11 @@ async def view(filename: str, type: str):
             await asyncio.sleep(retry_interval)  # 异步等待
             retries += 1
             continue
-
+        
         retries = max_retries
         try:
             response = requests.get(f"{url}/view?filename={filename}&type={type}")
+            print("response == ", response)
             if response.status_code == 200:
                 # 返回图片流
                 return StreamingResponse(response.iter_content(chunk_size=1024), media_type=response.headers.get("Content-Type"))
@@ -135,12 +133,13 @@ async def proxy_prompt(prompt_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload/image")
-async def proxy_upload_image(file: UploadFile):
+async def proxy_upload_image(image: UploadFile):
     """
     Proxy image upload to ComfyUI
     """
     try:
-        files = {"image": (file.filename, await file.read())}
+        file_content = await image.read()
+        files = {"image": (image.filename, file_content)}
         url = COMFYUI_BASE_URL
         response = await http_client.post(
             f"{url}/upload/image",
@@ -156,12 +155,12 @@ async def proxy_upload_image(file: UploadFile):
 
 
 @app.post("/upload/mask")
-async def proxy_upload_mask(file: UploadFile):
+async def proxy_upload_mask(image: UploadFile):
     """
     Proxy image upload to ComfyUI
     """
     try:
-        files = {"image": (file.filename, await file.read())}
+        files = {"image": (image.filename, await image.read())}
         url = COMFYUI_BASE_URL
         response = await http_client.post(
             f"{url}/upload/mask",
