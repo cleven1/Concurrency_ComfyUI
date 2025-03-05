@@ -34,7 +34,7 @@ async def cleanup_expired_prompt_ids():
 
 # ComfyUI base URL
 COMFYUI_BASE_URLS = ["http://127.0.0.1"]
-PORTS_RANGE = range(2000, 2005)
+PORTS_RANGE = range(2000, 2006) # 2000-2005
 PORTS = random.choice(PORTS_RANGE) 
 COMFYUI_BASE_URL = random.choice(COMFYUI_BASE_URLS) + ":" + str(PORTS)
 
