@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from utils import CACHES, find_value
 from datetime import datetime
 
-MAX_RETRIES=3
+MAX_RETRIES=30
 
 class ConnectionManager:
     def __init__(self):
@@ -43,7 +43,7 @@ class ConnectionManager:
                 return
             except Exception as e:
                 print(f"连接 {url} 失败: {str(e)}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
 
     async def broadcast_to_comfy(self, message: str):
         """广播消息到所有ComfyUI连接"""

@@ -1,4 +1,4 @@
-import asyncio, requests
+import asyncio, requests, torch
 from fastapi import FastAPI, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -34,7 +34,7 @@ async def cleanup_expired_prompt_ids():
 
 # ComfyUI base URL
 COMFYUI_BASE_URLS = ["http://127.0.0.1"]
-PORTS_RANGE = range(2000, 2006) # 2000-2005
+PORTS_RANGE = range(2000, 2005) # 2000-2004
 PORTS = random.choice(PORTS_RANGE) 
 COMFYUI_BASE_URL = random.choice(COMFYUI_BASE_URLS) + ":" + str(PORTS)
 
@@ -78,6 +78,8 @@ async def view(filename: str, type: str):
     max_retries = 15
     retry_interval = 1  # 重试间隔时间，单位为秒
 
+    # 清理缓存
+    torch.cuda.empty_cache()
     while retries < max_retries:
         detail = CACHES.get(filename)
         print("detail == ", detail)
